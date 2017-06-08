@@ -1,5 +1,3 @@
-# Iris
-
 ## Synopsis
 
 Uses a web camera to detect motion and saves images when motion is
