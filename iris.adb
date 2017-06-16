@@ -39,16 +39,20 @@ PROCEDURE IRIS IS
 
    TYPE IMAGE_ID IS (A, B);
 
+   INVALID_ARGUMENT    : EXCEPTION;
+
    IMAGE_A_FILENAME    : CONSTANT STRING  := ".IMAGE_A.jpg";
    IMAGE_B_FILENAME    : CONSTANT STRING  := ".IMAGE_B.jpg";
    IPC_FILENAME        : CONSTANT STRING  := ".iris";
    LOG_FILENAME        : CONSTANT 
          GNAT.CALENDAR.TIME_IO.PICTURE_STRING
            := "%Y%m%d-%H%M-%S.%i.jpg";
+   DIFF_FILENAME       : CONSTANT STRING  := ".DELTA.jpg";
    TRASH_OUTPUTS       : CONSTANT STRING  := " >&2 2> /dev/null";
-   CAPTURE_COUNT       : CONSTANT NATURAL := 10;
 
-   TRIGGER_THRESHOLD   : CONSTANT FLOAT   := 1.0;
+   CAPTURE_COUNT       : NATURAL          := 10;
+   TRIGGER_THRESHOLD   : FLOAT            := 1.0;
+   START_VIEWERS       : BOOLEAN          := FALSE;
 
    MOTION_DEBUG        : CONSTANT BOOLEAN := TRUE;
    CAPTURE_DEBUG       : CONSTANT BOOLEAN := FALSE;
@@ -59,24 +63,21 @@ PROCEDURE IRIS IS
    A_CAPTURE_TIME      : TIME;
    B_CAPTURE_TIME      : TIME;
 
-   CAPTURES_REMAINING  : NATURAL := 0;
-   DIFF                : STRING  := ".DELTA.jpg";
-   DIFF_AMOUNT         : FLOAT   := 0.0;
-   PREV_DIFF_AMOUNT    : FLOAT   := 0.0;
-
    CAMERA_NAME         : UNBOUNDED_STRING :=
                            TO_UNBOUNDED_STRING ("NO NAME");
 
    LOG_DIRECTORY       : UNBOUNDED_STRING :=
                            TO_UNBOUNDED_STRING (".");
-   
+
    TASK TYPE VIEWER IS
       ENTRY START (IMAGE_FILENAME : IN  STRING;
                    ID             : OUT TASK_ID);
    END VIEWER;
 
-   LIVE_VIEWER    : VIEWER;
-   DIFF_VIEWER    : VIEWER;
+   TYPE VIEWER_ACCESS IS ACCESS ALL VIEWER;
+
+   LIVE_VIEWER    : VIEWER_ACCESS;
+   DIFF_VIEWER    : VIEWER_ACCESS;
    LIVE_VIEWER_ID : TASK_ID;
    DIFF_VIEWER_ID : TASK_ID;
 
@@ -139,7 +140,7 @@ PROCEDURE IRIS IS
       IPC_FILE : FILE_TYPE;
       BEFORE   : TIME;
       AFTER    : TIME;
-      COMMAND  : STRING := "fswebcam --subtitle " &
+      COMMAND  : STRING := "fswebcam -S2 --subtitle " &
                             """" &
                             TO_STRING (CAMERA_NAME) &
                             """ " &
@@ -187,7 +188,7 @@ PROCEDURE IRIS IS
                     "-metric MAE " &
                     IMAGE_A_FILENAME & " " &
                     IMAGE_B_FILENAME &
-                    " " & DIFF & " 2> " &
+                    " " & DIFF_FILENAME & " 2> " &
                     IPC_FILENAME;
       BEGIN
          IF IMAGE_COMPARE_DEBUG THEN
@@ -246,16 +247,25 @@ PROCEDURE IRIS IS
       END;
       DIFFERENCE := COMPARE;
    END CAPTURE_AND_COMPARE;
-BEGIN
 
-   IF ARGUMENT_COUNT = 1 THEN
-      CAMERA_NAME := TO_UNBOUNDED_STRING (ARGUMENT (1));
-   END IF;
+   ----------------------------
+   -- SURVEILLANCE_ITERATION --
+   ----------------------------
 
-   LIVE_VIEWER.START (IMAGE_A_FILENAME, LIVE_VIEWER_ID);
-   DIFF_VIEWER.START (DIFF,             DIFF_VIEWER_ID);
+   PREV_DIFF_AMOUNT   : FLOAT := 0.0;
+   CAPTURES_REMAINING : NATURAL := 0;
 
-   LOOP
+   PROCEDURE SURVEILLANCE_ITERATION
+   IS
+      DIFF_AMOUNT : FLOAT   := 0.0;
+   BEGIN
+      -- CAPTURE AN IMAGE. IF THIS IS NOT THE FIRST IMAGE  --
+      -- CAPTURED THEN COMPARE IT WITH THE PREVIOUS IMAGE. --
+      -- IF THE PERCENT DIFFERENCE BETWEEN THIS IMAGE AND  --
+      -- THE PREVIOUS IMAGE IS ABOVE THE USER DEFINED      --
+      -- THRESHOLD THEN START LOGGING CONSECUTIVE IMAGES.  --
+      -- THE NUMBER OF IMAGES LOGGED IS USER DEFINED.      --
+
       CAPTURE_AND_COMPARE (DIFF_AMOUNT);
 
       IF PREV_DIFF_AMOUNT /= 0.0 THEN
@@ -276,7 +286,7 @@ BEGIN
             END IF;
          END;
       END IF;
-         
+
       PREV_DIFF_AMOUNT := DIFF_AMOUNT;
 
       DECLARE
@@ -308,14 +318,213 @@ BEGIN
             CAPTURES_REMAINING := CAPTURES_REMAINING - 1;
          END IF;
       END;
+   END SURVEILLANCE_ITERATION;
 
-      IF SIGINT THEN
-         ABORT_TASK (LIVE_VIEWER_ID);
-         ABORT_TASK (DIFF_VIEWER_ID);
-         EXIT;
+   -----------------------
+   -- SET_START_VIEWERS --
+   -----------------------
+
+   FUNCTION SET_START_VIEWERS
+      (ARGUMENT : STRING)
+       RETURN BOOLEAN
+   IS
+   BEGIN
+      IF ARGUMENT (ARGUMENT'FIRST .. ARGUMENT'FIRST + 1) = "-v"
+      THEN
+         START_VIEWERS := TRUE;
+         RETURN TRUE;
       END IF;
+      RETURN FALSE;
+   EXCEPTION
+      WHEN CONSTRAINT_ERROR =>
+         RETURN FALSE;
+   END SET_START_VIEWERS;
+
+   -----------------------
+   -- SET_LOG_DIRECTORY --
+   -----------------------
+
+   FUNCTION SET_LOG_DIRECTORY
+     (ARGUMENT : STRING)
+      RETURN BOOLEAN
+   IS
+   BEGIN
+      IF ARGUMENT (ARGUMENT'FIRST .. ARGUMENT'FIRST + 1) = "-l"
+      THEN
+         LOG_DIRECTORY := TO_UNBOUNDED_STRING
+            (ARGUMENT (ARGUMENT'FIRST + 2 .. ARGUMENT'LAST));
+         RETURN TRUE;
+      END IF;
+      RETURN FALSE;
+   EXCEPTION
+      WHEN CONSTRAINT_ERROR =>
+         RETURN FALSE;
+   END SET_LOG_DIRECTORY;
+
+   ---------------------
+   -- SET_CAMERA_NAME --
+   ---------------------
+
+   FUNCTION SET_CAMERA_NAME
+     (ARGUMENT : STRING)
+      RETURN BOOLEAN
+   IS
+   BEGIN
+      IF ARGUMENT (ARGUMENT'FIRST .. ARGUMENT'FIRST + 1) = "-c"
+      THEN
+         CAMERA_NAME := TO_UNBOUNDED_STRING
+            (ARGUMENT (ARGUMENT'FIRST + 2 .. ARGUMENT'LAST));
+         RETURN TRUE;
+      END IF;
+      RETURN FALSE;
+   EXCEPTION
+      WHEN CONSTRAINT_ERROR =>
+         RETURN FALSE;
+   END SET_CAMERA_NAME;
+
+   -----------------------
+   -- SET_CAPTURE_COUNT --
+   -----------------------
+
+   FUNCTION SET_CAPTURE_COUNT
+     (ARGUMENT : STRING)
+      RETURN BOOLEAN
+   IS
+   BEGIN
+      IF ARGUMENT (ARGUMENT'FIRST .. ARGUMENT'FIRST + 1) = "-c"
+      THEN
+         CAPTURE_COUNT := NATURAL'VALUE
+            (ARGUMENT (ARGUMENT'FIRST + 2 .. ARGUMENT'LAST));
+         RETURN TRUE;
+      END IF;
+      RETURN FALSE;
+   EXCEPTION
+      WHEN CONSTRAINT_ERROR =>
+         RETURN FALSE;
+   END SET_CAPTURE_COUNT;
+
+   ---------------------------
+   -- SET_TRIGGER_THRESHOLD --
+   ---------------------------
+
+   FUNCTION SET_TRIGGER_THRESHOLD
+     (ARGUMENT : STRING)
+      RETURN BOOLEAN
+   IS
+   BEGIN
+      IF ARGUMENT (ARGUMENT'FIRST .. ARGUMENT'FIRST + 1) = "-t"
+      THEN
+         TRIGGER_THRESHOLD := FLOAT'VALUE
+            (ARGUMENT (ARGUMENT'FIRST + 2 .. ARGUMENT'LAST));
+         RETURN TRUE;
+      END IF;
+      RETURN FALSE;
+   EXCEPTION
+      WHEN CONSTRAINT_ERROR =>
+         RETURN FALSE;
+   END SET_TRIGGER_THRESHOLD;
+
+   -----------------------
+   -- PROCESS_ARGUMENTS --
+   -----------------------
+
+   PROCEDURE PROCESS_ARGUMENTS
+   IS
+   BEGIN
+      FOR INDEX IN NATURAL RANGE 1 .. ARGUMENT_COUNT LOOP
+         IF SET_CAMERA_NAME (ARGUMENT (INDEX)) THEN
+            NULL;
+         ELSIF SET_TRIGGER_THRESHOLD (ARGUMENT (INDEX)) THEN
+            NULL;
+         ELSIF SET_CAPTURE_COUNT (ARGUMENT (INDEX)) THEN
+            NULL;
+         ELSIF SET_LOG_DIRECTORY (ARGUMENT (INDEX)) THEN
+            NULL;
+         ELSIF SET_START_VIEWERS (ARGUMENT (INDEX)) THEN
+            NULL;
+         ELSE
+            PUT ("Invalid argument: ");
+            PUT_LINE (ARGUMENT (INDEX));
+            RAISE INVALID_ARGUMENT;
+         END IF;
+      END LOOP;
+   END PROCESS_ARGUMENTS;
+
+   ---------------
+   -- PUT_USAGE --
+   ---------------
+
+   PROCEDURE PUT_USAGE
+   IS
+   BEGIN
+      PUT ("usage: iris -v [-cCamera_Name] ");
+      PUT ("[-tTrigger_Threshold] ");
+      PUT ("[-ccapture_Count ] ");
+      PUT ("[-lLog_Directory ");
+      NEW_LINE;
+   END PUT_USAGE;
+
+   --------------
+   -- PUT_HELP --
+   --------------
+
+   PROCEDURE PUT_HELP
+   IS
+   BEGIN
+      PUT_USAGE;
+      PUT_LINE ("  Camera_Name:       Camera name added to banner of");
+      PUT_LINE ("                     logged images.");
+      PUT_LINE ("                     default: NO NAME");
+      PUT_LINE ("  Trigger_Threshold: Minimum percent difference between two");
+      PUT_LINE ("                     images to trigger image logging.");
+      PUT_LINE ("                     default: 1.0");
+      PUT_LINE ("  Capture_Count:     Number of consecutive images to capture");
+      PUT_LINE ("                     when image capture has been triggered.");
+      PUT_LINE ("                     default: 10");
+      PUT_LINE ("  Log_Directory:     Path to store captured images on trigger.");
+      PUT_LINE ("                     default: .");
+      PUT_LINE ("  -v                 Start viewers (experimental)");
+   END PUT_HELP;
+
+   ------------------
+   -- PUT_SETTINGS --
+   ------------------
+
+   PROCEDURE PUT_SETTINGS
+   IS
+   BEGIN
+      PUT ("Camera Name         : ");
+      PUT_LINE (TO_STRING (CAMERA_NAME));
+      PUT ("Trigger Threshold   :");
+      FLOAT_TEXT_IO.PUT (TRIGGER_THRESHOLD, 2, 1, 0);
+      PUT_LINE (" %");
+      PUT ("Capture Count       :");
+      PUT_LINE (NATURAL'IMAGE (CAPTURE_COUNT));
+      PUT ("Image Log Directory : ");
+      PUT_LINE (TO_STRING (LOG_DIRECTORY));
+      NEW_LINE;
+   END PUT_SETTINGS;
+
+BEGIN
+
+   PROCESS_ARGUMENTS;
+   PUT_SETTINGS;
+
+   IF START_VIEWERS THEN
+      LIVE_VIEWER := NEW VIEWER;
+      DIFF_VIEWER := NEW VIEWER;
+      LIVE_VIEWER.START (IMAGE_A_FILENAME, LIVE_VIEWER_ID);
+      DIFF_VIEWER.START (DIFF_FILENAME,    DIFF_VIEWER_ID);
+   END IF;
+
+   LOOP
+      SURVEILLANCE_ITERATION;
+      EXIT WHEN SIGINT;
    END LOOP;
+
 EXCEPTION
+   WHEN INVALID_ARGUMENT =>
+      PUT_USAGE;
    WHEN ERROR: OTHERS =>
       PUT ("IRIS: ");
       PUT (EXCEPTION_INFORMATION (ERROR));
