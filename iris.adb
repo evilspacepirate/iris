@@ -63,6 +63,8 @@ PROCEDURE IRIS IS
    A_CAPTURE_TIME      : TIME;
    B_CAPTURE_TIME      : TIME;
 
+   HELP_MODE           : BOOLEAN := FALSE;
+
    CAMERA_NAME         : UNBOUNDED_STRING :=
                            TO_UNBOUNDED_STRING ("NO NAME");
 
@@ -83,6 +85,42 @@ PROCEDURE IRIS IS
 
    PROCEDURE SYSTEM (ARGUMENTS : CHAR_ARRAY);
    PRAGMA IMPORT (C, SYSTEM, "system");
+
+   ---------------
+   -- PUT_USAGE --
+   ---------------
+
+   PROCEDURE PUT_USAGE
+   IS
+   BEGIN
+      PUT ("usage: iris -vh [-cCamera_Name] ");
+      PUT ("[-tTrigger_Threshold] ");
+      PUT ("[-ccapture_Count ] ");
+      PUT ("[-lLog_Directory ");
+      NEW_LINE;
+   END PUT_USAGE;
+   --------------
+   -- PUT_HELP --
+   --------------
+
+   PROCEDURE PUT_HELP
+   IS
+   BEGIN
+      PUT_USAGE;
+      PUT_LINE ("  Camera_Name:       Camera name added to banner of");
+      PUT_LINE ("                     logged images.");
+      PUT_LINE ("                     default: NO NAME");
+      PUT_LINE ("  Trigger_Threshold: Minimum percent difference between two");
+      PUT_LINE ("                     images to trigger image logging.");
+      PUT_LINE ("                     default: 1.0");
+      PUT_LINE ("  Capture_Count:     Number of consecutive images to capture");
+      PUT_LINE ("                     when image capture has been triggered.");
+      PUT_LINE ("                     default: 10");
+      PUT_LINE ("  Log_Directory:     Path to store captured images on trigger.");
+      PUT_LINE ("                     default: .");
+      PUT_LINE ("  -v                 Start viewers (experimental)");
+   END PUT_HELP;
+
 
    -----------------
    -- FILE_EXISTS --
@@ -424,6 +462,27 @@ PROCEDURE IRIS IS
          RETURN FALSE;
    END SET_TRIGGER_THRESHOLD;
 
+   ---------------
+   -- SHOW_HELP --
+   ---------------
+
+   FUNCTION SHOW_HELP
+     (ARGUMENT : STRING)
+      RETURN BOOLEAN
+   IS
+   BEGIN
+      IF ARGUMENT (ARGUMENT'FIRST .. ARGUMENT'FIRST + 1) = "-h"
+      THEN
+         PUT_HELP;
+         HELP_MODE := TRUE;
+         RETURN TRUE;
+      END IF;
+      RETURN FALSE;
+   EXCEPTION
+      WHEN CONSTRAINT_ERROR =>
+         RETURN FALSE;
+   END SHOW_HELP;
+
    -----------------------
    -- PROCESS_ARGUMENTS --
    -----------------------
@@ -442,6 +501,8 @@ PROCEDURE IRIS IS
             NULL;
          ELSIF SET_START_VIEWERS (ARGUMENT (INDEX)) THEN
             NULL;
+         ELSIF SHOW_HELP (ARGUMENT (INDEX)) THEN
+            NULL;
          ELSE
             PUT ("Invalid argument: ");
             PUT_LINE (ARGUMENT (INDEX));
@@ -449,42 +510,6 @@ PROCEDURE IRIS IS
          END IF;
       END LOOP;
    END PROCESS_ARGUMENTS;
-
-   ---------------
-   -- PUT_USAGE --
-   ---------------
-
-   PROCEDURE PUT_USAGE
-   IS
-   BEGIN
-      PUT ("usage: iris -v [-cCamera_Name] ");
-      PUT ("[-tTrigger_Threshold] ");
-      PUT ("[-ccapture_Count ] ");
-      PUT ("[-lLog_Directory ");
-      NEW_LINE;
-   END PUT_USAGE;
-
-   --------------
-   -- PUT_HELP --
-   --------------
-
-   PROCEDURE PUT_HELP
-   IS
-   BEGIN
-      PUT_USAGE;
-      PUT_LINE ("  Camera_Name:       Camera name added to banner of");
-      PUT_LINE ("                     logged images.");
-      PUT_LINE ("                     default: NO NAME");
-      PUT_LINE ("  Trigger_Threshold: Minimum percent difference between two");
-      PUT_LINE ("                     images to trigger image logging.");
-      PUT_LINE ("                     default: 1.0");
-      PUT_LINE ("  Capture_Count:     Number of consecutive images to capture");
-      PUT_LINE ("                     when image capture has been triggered.");
-      PUT_LINE ("                     default: 10");
-      PUT_LINE ("  Log_Directory:     Path to store captured images on trigger.");
-      PUT_LINE ("                     default: .");
-      PUT_LINE ("  -v                 Start viewers (experimental)");
-   END PUT_HELP;
 
    ------------------
    -- PUT_SETTINGS --
@@ -508,6 +533,11 @@ PROCEDURE IRIS IS
 BEGIN
 
    PROCESS_ARGUMENTS;
+
+   IF HELP_MODE THEN
+      RETURN;
+   END IF;
+
    PUT_SETTINGS;
 
    IF START_VIEWERS THEN
