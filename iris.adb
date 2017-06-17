@@ -118,6 +118,7 @@ PROCEDURE IRIS IS
       PUT_LINE ("                     default: 10");
       PUT_LINE ("  Log_Directory:     Path to store captured images on trigger.");
       PUT_LINE ("                     default: .");
+      PUT_LINE ("  -h                 Show this help text");
       PUT_LINE ("  -v                 Start viewers (experimental)");
    END PUT_HELP;
 
